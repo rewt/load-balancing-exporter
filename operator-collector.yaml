@@ -1,0 +1,106 @@
+opentelemetry-operator:
+  pdb:
+    create: false
+  admissionWebhooks:
+    create: false
+  manager:
+    env:
+      ENABLE_WEBHOOKS: "false"
+    serviceAccount:
+      create: false
+      name: "app"
+    createRbacPermissions: true
+    image:
+      repository: ghcr.io/open-telemetry/opentelemetry-operator/opentelemetry-operator
+      tag: 0.126.0
+    collectorImage:
+      repository: ghcr.io/open-telemetry/opentelemetry-collector-releases/opentelemetry-collector-contrib
+      tag: 0.126.0
+
+open_telemetry_collectors:
+  main:
+    name: "dev-opentelemetry-main"
+    replicas: 9
+    podDisruptionBudget:
+      minAvailable: 2
+    resources:
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+      requests:
+        cpu: 1000m
+        memory: 2Gi
+    autoscaler:
+      minReplicas: 9
+      maxReplicas: 30
+      targetCPUUtilization: 70
+      targetMemoryUtilization: 65
+      behavior:
+        scaleUp:
+          stabilizationWindowSeconds: 30
+          policies:
+            - type: Pods
+              value: 2
+              periodSeconds: 15
+        scaleDown:
+          stabilizationWindowSeconds: 300
+          policies:
+            - type: Pods
+              value: 1
+              periodSeconds: 60
+    topologySpreadConstraints:
+      - maxSkew: 1
+        topologyKey: kubernetes.io/hostname
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: dev-opentelemetry-main
+      - maxSkew: 1
+        topologyKey: topology.kubernetes.io/zone
+        whenUnsatisfiable: ScheduleAnyway
+        labelSelector:
+          matchLabels:
+            app.kubernetes.io/name: dev-opentelemetry-main
+    serviceAccount: app
+    config:
+      receivers:
+        otlp:
+          protocols:
+            grpc:
+              endpoint: 0.0.0.0:4317
+            http:
+              endpoint: 0.0.0.0:4318
+      processors:
+        batch:
+          send_batch_size: 20000
+          timeout: 5s
+          send_batch_max_size: 25000
+      exporters:
+        loadbalancing:
+          routing_key: "traceID"
+          protocol:
+            otlp:
+              timeout: 1s
+              tls:
+                insecure: true
+          resolver:
+            k8s:
+              service: dev-opentelemetry-backend-collector-headless.otel-dev
+              timeout: 3s
+              return_hostnames: true
+      service:
+        telemetry:
+          metrics:
+            address: ""
+            level: detailed
+            readers:
+              - pull:
+                  exporter:
+                    prometheus:
+                      host: "0.0.0.0"
+                      port: 8888
+        pipelines:
+          traces:
+            receivers: [otlp]
+            processors: [batch]
+            exporters: [loadbalancing]
